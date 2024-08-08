@@ -4,10 +4,10 @@ import { generateId } from './utils';
 
 /*
  On get, this entry point is will return a URL to a publicly available r2 object.
- This url is in the form of
+ This response url is in the form of
  - 'https://r2.clipster.dev/captures/user-{userId}/{fileName}.jpg'.
- - userId is base64 encoded
- - filename is 'hostname_{width}x{height}', but base64 encoded
+ - userId is clerk user's id but base64 encoded
+ - filename is '{captureKey}.jpg'
 
  On post, this entry point will capture the url provided and store it in the bucket.
  - Expects form post with 'url' field
@@ -25,7 +25,7 @@ export default {
 		const requestState = await clerk.authenticateRequest(request);
 		const authState = requestState.toAuth();
 
-		if (!authState || !authState.userId) {
+		if (!authState || !authState?.userId) {
 			return Response.redirect(requestState.signInUrl, 307);
 		}
 
@@ -39,15 +39,15 @@ export default {
 				const formData = await request.formData();
 				const url = formData.get('url');
 
-				if (!url || !userId) {
+				if (!url || !authState.userId) {
 					return new Response('Invalid capture options', { status: 400 });
 				}
 
 				const id = env.BROWSER.idFromName('browser');
 				const obj = env.BROWSER.get(id);
 
-				const doRequest = new Request('clipster://capture', { headers: { 'user-id': userId, url: url.full } });
-				const resp = await obj.fetch(request);
+				const doRequest = new Request('clipster://capture', { headers: { 'user-id': authState.userId, url: url.toString() } });
+				const resp = await obj.fetch(doRequest);
 
 				return resp;
 			}
