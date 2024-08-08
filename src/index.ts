@@ -1,15 +1,61 @@
 import puppeteer from '@cloudflare/puppeteer';
+import { createClerkClient } from '@clerk/backend';
+import { generateId } from './utils';
+
+/*
+ On get, this entry point is will return a URL to a publicly available r2 object.
+ This url is in the form of
+ - 'https://r2.clipster.dev/captures/user-{userId}/{fileName}.jpg'.
+ - userId is base64 encoded
+ - filename is 'hostname_{width}x{height}', but base64 encoded
+
+ On post, this entry point will capture the url provided and store it in the bucket.
+ - Expects form post with 'url' field
+
+ This entry point is protected with Clerk, expects a request sent from a signed-in
+ user of clipster.dev.
+
+ Will keep the browser alive for 60 seconds after the last request
+*/
 
 export default {
 	async fetch(request: Request, env: Env) {
+		const url = new URL(request.url);
+		const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
+		const requestState = await clerk.authenticateRequest(request);
+		const authState = requestState.toAuth();
 
-		let id = env.BROWSER.idFromName("browser");
-		let obj = env.BROWSER.get(id);
+		if (!authState || !authState.userId) {
+			return Response.redirect(requestState.signInUrl, 307);
+		}
 
-		let resp = await obj.fetch(request);
+		switch (request.method) {
+			case 'GET': {
+				const origin = env.BUCKET_ORIGIN;
+				const captureUrl = url.searchParams.get('url');
+				return new Response(`Hello from the browser Durable Object! Bucket origin: ${origin}`);
+			}
+			case 'POST': {
+				const formData = await request.formData();
+				const url = formData.get('url');
 
-		return resp;
-	}
+				if (!url || !userId) {
+					return new Response('Invalid capture options', { status: 400 });
+				}
+
+				const id = env.BROWSER.idFromName('browser');
+				const obj = env.BROWSER.get(id);
+
+				const doRequest = new Request('clipster://capture', { headers: { 'user-id': userId, url: url.full } });
+				const resp = await obj.fetch(request);
+
+				return resp;
+			}
+			default: {
+				return new Response('Invalid method', { status: 405 });
+			}
+		}
+	},
 };
 
 const KEEP_BROWSER_ALIVE_IN_SECONDS = 60;
@@ -29,20 +75,21 @@ export class Browser {
 	}
 
 	async fetch(request: Request) {
-		const urlHeader = request.headers.get("url");
-		const url = new URL(urlHeader ?? 'https://example.com')
-		const userId = request.headers.get("user-id");
+		const urlHeader = request.headers.get('url');
+		const userId = request.headers.get('user-id');
+		const fullPage = request.headers.get('full-page');
 
-		if (!userId) {
-			return new Response("User ID not found", { status: 400 });
+		if (!urlHeader) {
+			return Response.json({ success: false, error: 'Invalid capture options: Missing URL' }, { status: 400 });
 		}
 
-		// screen resolutions to test out
-		const width = [1920]
-		const height = [1080]
+		const url = new URL(urlHeader);
 
-		const userFolder = `user-${btoa(userId)}`;
-		const folder = `captures/${userFolder}`;
+		if (!userId) {
+			return Response.json({ success: false, error: 'Invalid capture options: Missing user ID' }, { status: 400 });
+		}
+
+		const folder = `captures/user-${btoa(userId)}`;
 
 		//if there's a browser session open, re-use it
 		if (!this.browser || !this.browser.isConnected()) {
@@ -51,40 +98,39 @@ export class Browser {
 				this.browser = await puppeteer.launch(this.env.MYBROWSER);
 			} catch (e) {
 				console.log(`Browser DO: Could not start browser instance. Error: ${e}`);
-				return new Response("Failed to start browser", { status: 500 });
+				return Response.json({ success: false, error: 'Failed to start browser' }, { status: 500 });
 			}
 		}
 
 		// Ensure browser is not null before proceeding
 		if (!this.browser) {
 			console.log(`Browser DO: Browser is null after attempted launch`);
-			return new Response("Browser initialization failed", { status: 500 });
+			return Response.json({ success: false, error: 'Browser initialization failed' }, { status: 500 });
 		}
 
 		// Reset keptAlive after each call to the DO
 		this.keptAliveInSeconds = 0;
 
-		const captureKey = []
+		const width = 1920;
+		const height = 1080;
+
+		const captureKey = generateId();
 
 		try {
 			const page = await this.browser.newPage();
 
-			// take screenshots of each screen size
-			for (let i = 0; i < width.length; i++) {
-				await page.setViewport({ width: width[i], height: height[i] });
-				await page.goto(url.href);
-				const fileName = `${url.href}_${width[i]}x${height[i]}`;
-				const key = `${folder}/${fileName}.jpg`;
-				const sc = await page.screenshot({ path: `${fileName}.jpg`, fullPage: false });
-				await this.env.BUCKET.put(key, sc);
-				captureKey.push(key);
-			}
+			await page.setViewport({ width, height });
+			await page.goto(url.href);
 
-			// Close tab when there is no more work to be done on the page
+			const fileName = `${captureKey}.jpg`;
+			const sc = await page.screenshot({ path: fileName, fullPage: Boolean(fullPage) });
+
+			const bucketKey = `${folder}/${fileName}`;
+			await this.env.BUCKET.put(bucketKey, sc);
+
 			await page.close();
 		} catch (error) {
-			console.error(`Error during page operations: ${error}`);
-			return new Response("Error during page operations", { status: 500 });
+			return Response.json({ success: false, error: 'Error during page operations' }, { status: 500 });
 		}
 
 		// Reset keptAlive after performing tasks to the DO.
@@ -98,7 +144,7 @@ export class Browser {
 			await this.storage.setAlarm(Date.now() + TEN_SECONDS);
 		}
 
-		return new Response(JSON.stringify({ sucess: true, captureKey }), { status: 200 });
+		return Response.json({ success: true, key: captureKey }, { status: 200 });
 	}
 
 	async alarm() {
@@ -119,5 +165,4 @@ export class Browser {
 			}
 		}
 	}
-
 }
