@@ -2,9 +2,13 @@
 name = "clipster-worker"
 main = "src/index.ts"
 compatibility_date = "2024-07-29"
-compatibility_flags = [ "nodejs_compat"]
+compatibility_flags = ["nodejs_compat"]
 
 browser = { binding = "MYBROWSER" }
+
+[vars]
+# r2 is publicly available, so we use our custom domain
+BUCKET_ORIGIN = "https://r2.clipster.dev"
 
 # Bind an R2 Bucket. Use R2 to store arbitrarily large blobs of data, such as files.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#r2-buckets
@@ -23,7 +27,7 @@ class_name = "Browser"
 # Durable Object migrations.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#migrations
 [[migrations]]
-tag = "v1" # Should be unique for each entry
+tag = "v1"                # Should be unique for each entry
 new_classes = ["Browser"] # Array of new classes
 
 # Bind a Queue consumer. Queue Consumers can retrieve tasks scheduled by Producers to act on them.
