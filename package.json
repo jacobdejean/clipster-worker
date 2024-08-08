@@ -13,5 +13,9 @@
     "@cloudflare/workers-types": "^4.20240729.0",
     "typescript": "^5.5.2",
     "wrangler": "^3.60.3"
+  },
+  "dependencies": {
+    "@clerk/backend": "^1.6.1",
+    "nanoid": "^5.0.7"
   }
 }
